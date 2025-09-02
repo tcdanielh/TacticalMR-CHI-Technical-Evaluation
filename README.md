@@ -32,3 +32,8 @@ Run the main analysis script:
 ```bash
 python analyze_study_data.py <path_to_csv>
 ```
+
+Example:
+```bash
+python analyze_study_data.py data/data.csv
+```
