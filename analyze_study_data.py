@@ -3,8 +3,8 @@
 Main study: analysis & visualization (colored)
 
 1) Box plots for improvement in:
-   - Completeness (Avatar Demonstrations)  -> Δ percentage points (AF - BF)
-   - Correctness (Edges & Nodes)           -> Δ percentage points (AF - BF)
+   - Correctness (Avatar Demonstrations)  -> Δ percentage points (AF - BF)
+   - Completeness (Edges & Nodes)           -> Δ percentage points (AF - BF)
 
 2) Box plots for comparative Likert deltas (AF - BF):
    - Decision flow learned as intended (diff.2)
@@ -220,22 +220,22 @@ def main(csv_path):
     ad_af = to_pct_series(df["% score AF"])
     en_bf = to_pct_series(df["% score BF.1"])
     en_af = to_pct_series(df["% score AF.1"])
-    completeness_improve = ad_af - ad_bf
-    correctness_improve   = en_af - en_bf
+    correctness_improve = ad_af - ad_bf
+    completeness_improve = en_af - en_bf
 
     out_dir = Path("outputs")
     out_dir.mkdir(exist_ok=True, parents=True)
 
-    save_boxplot(completeness_improve.dropna(),
-                 "Completeness Improvement (Avatar Demonstrations)\n% After − % Before",
+    save_boxplot(correctness_improve.dropna(),
+                 "Correctness Improvement (Avatar Demonstrations)\n% After − % Before",
                  "Δ Percentage Points",
-                 "completeness_improvement_boxplot.png",
+                 "Correctness_improvement_boxplot.png",
                  out_dir, fill_color=PALE_RED)
 
-    save_boxplot(correctness_improve.dropna(),
-                 "Correctness Improvement (Edges & Nodes)\n% After − % Before",
+    save_boxplot(completeness_improve.dropna(),
+                 "Completeness Improvement (Edges & Nodes)\n% After − % Before",
                  "Δ Percentage Points",
-                 "correctness_improvement_boxplot.png",
+                 "Completeness_improvement_boxplot.png",
                  out_dir, fill_color=PALE_BLUE)
 
     # 2) Comparative Likert (diff.2 & diff.3)
@@ -282,8 +282,8 @@ def main(csv_path):
 
     # Optional CSV stats export
     rows = [
-        summarize_stats("Completeness Δ (pp)", completeness_improve),
-        summarize_stats("Correctness Δ (pp)",  correctness_improve),
+        summarize_stats("Correctness Δ (pp)", correctness_improve),
+        summarize_stats("Completeness Δ (pp)",  completeness_improve),
         summarize_stats("Comp Likert Δ (Decision flow)", comp1),
         summarize_stats("Comp Likert Δ (Teach readiness)", comp2),
     ]
