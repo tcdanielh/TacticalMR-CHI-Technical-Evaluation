@@ -16,6 +16,7 @@ Main study: analysis & visualization (colored)
 """
 
 import re
+import csv
 import sys
 import numpy as np
 import pandas as pd
@@ -212,7 +213,7 @@ def diverging_stacked_bar(ax, percentages, title, n_total):
         borderaxespad=0.0
     )
 
-def save_before_after_mean_bars(before_vals, after_vals, title, ylabel, filename, out_dir, colors=(PALE_RED, PALE_BLUE)):
+def save_before_after_mean_bars(before_vals, after_vals, title, ylabel, filename, out_dir, colors=(PALE_RED, PALE_BLUE), provided_std=None):
     """
     Save a simple bar chart comparing the mean Before vs After values with 95% CI error bars.
     Inputs are numeric-like series (percentages or likert points). Values are coerced to numeric.
@@ -220,25 +221,35 @@ def save_before_after_mean_bars(before_vals, after_vals, title, ylabel, filename
     b = pd.to_numeric(before_vals, errors='coerce').dropna()
     a = pd.to_numeric(after_vals, errors='coerce').dropna()
 
-    # compute means and 95% CI using t ~ 1.96 (approx for decent N)
-    def mean_ci(x):
+    # compute means; error bars will prefer provided std if available
+    def mean_only(x):
         if len(x) == 0:
-            return np.nan, np.nan
-        m = float(x.mean())
-        se = float(x.std(ddof=1) / np.sqrt(len(x))) if len(x) > 1 else 0.0
-        ci95 = 1.96 * se
-        return m, ci95
+            return np.nan
+        return float(x.mean())
 
-    mean_b, ci_b = mean_ci(b)
-    mean_a, ci_a = mean_ci(a)
+    mean_b = mean_only(b)
+    mean_a = mean_only(a)
 
     fig, ax = plt.subplots(figsize=(7.5, 5.5))
     x = np.arange(2)
     means = [mean_b, mean_a]
-    cis = [ci_b, ci_a]
+    if provided_std is not None:
+        # Use provided STD directly as error bars
+        std_b, std_a = provided_std
+        errs = [std_b if np.isfinite(std_b) else np.nan, std_a if np.isfinite(std_a) else np.nan]
+        err_label = "SD"
+    else:
+        # Fall back to 95% CI using sample SE if STD not provided
+        def ci_from_series(x):
+            if len(x) <= 1:
+                return 0.0
+            se = float(x.std(ddof=1) / np.sqrt(len(x)))
+            return 1.96 * se
+        errs = [ci_from_series(b), ci_from_series(a)]
+        err_label = "95% CI"
     palette = [colors[0], colors[1]]
 
-    ax.bar(x, means, yerr=cis, capsize=6, color=palette, edgecolor="black", linewidth=1.2)
+    ax.bar(x, means, yerr=errs, capsize=6, color=palette, edgecolor="black", linewidth=1.2)
     ax.set_xticks(x)
     ax.set_xticklabels([f"Before (N={len(b)})", f"After (N={len(a)})"])
     ax.set_ylabel(ylabel)
@@ -247,7 +258,7 @@ def save_before_after_mean_bars(before_vals, after_vals, title, ylabel, filename
 
     # Dynamic y-limit to prevent labels from going outside the frame
     finite_candidates = []
-    for val in [mean_b + (ci_b if not np.isnan(ci_b) else 0), mean_a + (ci_a if not np.isnan(ci_a) else 0)]:
+    for val in [mean_b + (errs[0] if not np.isnan(errs[0]) else 0), mean_a + (errs[1] if not np.isnan(errs[1]) else 0)]:
         if np.isfinite(val):
             finite_candidates.append(val)
     if len(b) > 0 and np.isfinite(b.max()):
@@ -264,8 +275,8 @@ def save_before_after_mean_bars(before_vals, after_vals, title, ylabel, filename
     margin = 0.02 * y_max
     for i, v in enumerate(means):
         if not np.isnan(v):
-            this_ci = cis[i] if (i < len(cis) and np.isfinite(cis[i])) else 0.0
-            desired = v + this_ci + offset
+            this_err = errs[i] if (i < len(errs) and np.isfinite(errs[i])) else 0.0
+            desired = v + this_err + offset
             if desired >= (y_max - margin):
                 label_y = y_max - margin
                 va = 'top'
@@ -273,6 +284,9 @@ def save_before_after_mean_bars(before_vals, after_vals, title, ylabel, filename
                 label_y = desired
                 va = 'bottom'
             ax.text(i, label_y, f"{v:.1f}", ha='center', va=va, fontsize=11)
+
+    # Subtitle to clarify error bar type
+    # ax.text(0.98, 0.02, f"Error bars: {err_label}", transform=ax.transAxes, ha='right', va='bottom', fontsize=9, color="#555")
 
     fig.tight_layout()
     fp = out_dir / filename
@@ -333,10 +347,10 @@ def save_scatter_with_trendline(x_vals, y_vals, title, xlabel, ylabel, filename,
         ax.set_xticks([0,1])
         ax.set_xticklabels(["No", "Yes"])
 
-    # Annotate N and Pearson
-    ax.text(0.02, 0.98, f"N = {len(x_clean)}\nPearson r = {pearson_r:.2f}\np = {pearson_p:.3f}",
-            transform=ax.transAxes, va="top", ha="left",
-            bbox=dict(boxstyle="round", facecolor="#f0f0f0", alpha=0.9), fontsize=11)
+    # Annotate N and Pearson (moved to top-right to avoid covering top-left points)
+    ax.text(0.98, 0.98, f"N = {len(x_clean)}\nPearson r = {pearson_r:.2f}\np = {pearson_p:.3f}",
+            transform=ax.transAxes, va="top", ha="right",
+            bbox=dict(boxstyle="round", facecolor="#f0f0f0", alpha=0.85), fontsize=11)
 
     if slope is not None:
         ax.legend(loc="lower right")
@@ -355,17 +369,104 @@ def find_col_by_prefix_and_phrase(columns, prefix, phrase):
             return c
     return None
 
+def parse_summary_rows(csv_path):
+    """
+    Parse AVG and STD rows from the raw CSV (kept at bottom), returning two dicts that map
+    "de-duplicated" column names (matching pandas' .1 suffix scheme) to float values.
+    """
+    with open(csv_path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+
+    # Find header
+    header_idx = None
+    for i, line in enumerate(lines):
+        if line.startswith("Participant,"):
+            header_idx = i
+            break
+    if header_idx is None:
+        return {}, {}
+
+    # Use csv.reader to correctly parse quoted commas
+    header = next(csv.reader([lines[header_idx]]))
+
+    avg_vals = None
+    std_vals = None
+    for line in lines[header_idx+1:]:
+        if not line.strip():
+            continue
+        first_cell = next(csv.reader([line]))[0].strip()
+        if first_cell == "AVG":
+            avg_vals = next(csv.reader([line]))
+        elif first_cell == "STD":
+            std_vals = next(csv.reader([line]))
+        # stop if we've found both
+        if avg_vals is not None and std_vals is not None:
+            break
+
+    def build_map(values):
+        if values is None:
+            return {}
+        # Normalize numeric strings: strip % and coerce
+        vals = []
+        for v in values:
+            v = v.strip()
+            if v.endswith('%'):
+                v = v[:-1]
+            try:
+                vals.append(float(v))
+            except Exception:
+                vals.append(np.nan)
+        # Map to deduped column names
+        name_counts = {}
+        out = {}
+        for idx, base in enumerate(header):
+            key = base
+            if base in name_counts:
+                suffix = name_counts[base]
+                key = f"{base}.{suffix}"
+                name_counts[base] = suffix + 1
+            else:
+                name_counts[base] = 1
+            # Skip row labels like AVG/STD first cell
+            if idx == 0:
+                continue
+            if idx < len(vals):
+                out[key] = vals[idx]
+        return out
+
+    return build_map(avg_vals), build_map(std_vals)
+
 # ---------- Main ----------
 def main(csv_path):
     df = read_study_csv(csv_path)
+    avg_map, std_map = parse_summary_rows(csv_path)
 
     # 1) Improvements
-    ad_bf = to_pct_series(df["% score BF"])
-    ad_af = to_pct_series(df["% score AF"])
-    en_bf = to_pct_series(df["% score BF.1"])
-    en_af = to_pct_series(df["% score AF.1"])
+    ad_bf = to_pct_series(df["% score BF"])          # Correctness % BF
+    ad_af = to_pct_series(df["% score AF"])          # Correctness % AF
+    en_bf = to_pct_series(df["% score BF.1"])        # Completeness % BF
+    en_af = to_pct_series(df["% score AF.1"])        # Completeness % AF
+
+    # Compute deltas, then mask with CSV-provided diff columns if present (to exclude cases like 100% BF and AF)
     correctness_improve = ad_af - ad_bf
     completeness_improve = en_af - en_bf
+
+    # Use the CSV diff columns to determine valid N for improvements
+    corr_diff_col = df.columns[df.columns.get_loc("% score AF") + 1] if "% score AF" in df.columns else None
+    comp_diff_col = df.columns[df.columns.get_loc("% score AF.1") + 1] if "% score AF.1" in df.columns else None
+
+    # Fallback names commonly seen: 'diff' and 'diff.1'
+    if corr_diff_col is None and "diff" in df.columns:
+        corr_diff_col = "diff"
+    if comp_diff_col is None and "diff.1" in df.columns:
+        comp_diff_col = "diff.1"
+
+    if corr_diff_col and corr_diff_col in df.columns:
+        corr_diff_vals = to_pct_series(df[corr_diff_col])
+        correctness_improve = correctness_improve.where(corr_diff_vals.notna())
+    if comp_diff_col and comp_diff_col in df.columns:
+        comp_diff_vals = to_pct_series(df[comp_diff_col])
+        completeness_improve = completeness_improve.where(comp_diff_vals.notna())
 
     out_dir = Path("outputs")
     out_dir.mkdir(exist_ok=True, parents=True)
@@ -385,20 +486,22 @@ def main(csv_path):
     # New: Before vs After bar charts (means with 95% CI)
     save_before_after_mean_bars(
         ad_bf, ad_af,
-        title="Correctness: Before vs After (mean ± 95% CI)",
+        title="Correctness: Before vs After (mean ± SD)",
         ylabel="Percentage",
         filename="correctness_before_after_bar.png",
         out_dir=out_dir,
-        colors=(PALE_RED, PALE_BLUE)
+        colors=(PALE_RED, PALE_BLUE),
+        provided_std=(std_map.get("% score BF", np.nan), std_map.get("% score AF", np.nan))
     )
 
     save_before_after_mean_bars(
         en_bf, en_af,
-        title="Completeness: Before vs After (mean ± 95% CI)",
+        title="Completeness: Before vs After (mean ± SD)",
         ylabel="Percentage",
         filename="completeness_before_after_bar.png",
         out_dir=out_dir,
-        colors=(PALE_RED, PALE_BLUE)
+        colors=(PALE_RED, PALE_BLUE),
+        provided_std=(std_map.get("% score BF.1", np.nan), std_map.get("% score AF.1", np.nan))
     )
 
     # 2) Comparative Likert (diff.2 & diff.3)
@@ -434,21 +537,23 @@ def main(csv_path):
     if q1_bf_col in df.columns and q1_af_col in df.columns:
         save_before_after_mean_bars(
             df[q1_bf_col], df[q1_af_col],
-            title="Comparative Likert: Decision flow learned — Before vs After (mean ± 95% CI)",
+            title="Comparative Likert: Decision flow learned — Before vs After (mean ± SD)",
             ylabel="Likert (1–7)",
             filename="comparative_likert_q1_before_after_bar.png",
             out_dir=out_dir,
-            colors=(PALE_RED, PALE_BLUE)
+            colors=(PALE_RED, PALE_BLUE),
+            provided_std=(std_map.get(q1_bf_col, np.nan), std_map.get(q1_af_col, np.nan))
         )
 
     if q2_bf_col in df.columns and q2_af_col in df.columns:
         save_before_after_mean_bars(
             df[q2_bf_col], df[q2_af_col],
-            title="Comparative Likert: Learning good enough to teach — Before vs After (mean ± 95% CI)",
+            title="Comparative Likert: Learning good enough to teach — Before vs After (mean ± SD)",
             ylabel="Likert (1–7)",
             filename="comparative_likert_q2_before_after_bar.png",
             out_dir=out_dir,
-            colors=(PALE_RED, PALE_BLUE)
+            colors=(PALE_RED, PALE_BLUE),
+            provided_std=(std_map.get(q2_bf_col, np.nan), std_map.get(q2_af_col, np.nan))
         )
 
     # 3) Non-comparative Likert → diverging stacked bars
